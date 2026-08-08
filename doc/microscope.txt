@@ -1,0 +1,218 @@
+*microscope.txt*  One picker with two query fields
+
+==============================================================================
+CONTENTS                                                        *microscope*
+
+  1. Introduction ................ |microscope-introduction|
+  2. Requirements ................ |microscope-requirements|
+  3. Setup ....................... |microscope-setup|
+  4. Mappings .................... |microscope-mappings|
+  5. Query syntax ................ |microscope-queries|
+  6. Configuration ............... |microscope-configuration|
+  7. Commands .................... |microscope-commands|
+  8. Lua API ..................... |microscope-api|
+  9. Highlights .................. |microscope-highlights|
+
+==============================================================================
+1. INTRODUCTION                                     *microscope-introduction*
+
+microscope.nvim is a picker with two independent query fields: `files`, which
+narrows the candidate file set, and `grep`, which searches text inside it.
+
+A blank field means "no restriction", so one picker covers three jobs:
+
+  files    grep     result ~
+  blank    blank    every file, i.e. a plain file finder
+  set      blank    the narrowed file list
+  blank    set      grep across everything, i.e. a plain live grep
+  set      set      grep inside the narrowed file list
+
+The prompt is anchored at the bottom of the window and the results list grows
+upward from it, so the best match is always on the row nearest the cursor.
+
+==============================================================================
+2. REQUIREMENTS                                     *microscope-requirements*
+
+  - Neovim 0.10 or newer
+  - ripgrep (`rg`) on $PATH
+
+There are no Lua dependencies.
+
+==============================================================================
+3. SETUP                                                   *microscope-setup*
+
+>lua
+    require("microscope").setup({})
+<
+This registers |<leader>ff| (opens with the files field focused) and
+|<leader>fg| (opens with the grep field focused). Both open the same window.
+Set `default_binds = false` to bind the |microscope-api| functions yourself.
+
+==============================================================================
+4. MAPPINGS                                             *microscope-mappings*
+
+Active inside the picker. Every key is overridable, see `keymaps` under
+|microscope-configuration|.
+
+  <Tab> <Up>     move the cursor up one row, through the prompt and the whole
+                 result list: files -> grep -> best match -> ... -> worst
+                 match -> back round to files
+  <S-Tab> <Down> move the cursor down one row, the reverse of the above
+  <C-n>          select the next match (upward on screen), staying in the
+                 prompt so you can keep typing
+  <C-p>          select the previous match (downward on screen), likewise
+  j k            in the result list, move down / up the screen without
+                 leaving it
+  gg G           in the result list, jump to the last / first match
+  <CR>           open the selection
+  <C-x>          open in a horizontal split
+  <C-v>          open in a vertical split
+  <C-t>          open in a new tab
+  <C-q>          send every current result to the quickfix list
+  <C-h>          toggle hidden and .gitignore'd files
+  <C-d> <C-u>    scroll the preview down / up
+  <Esc> <C-c>    close
+
+Opening a grep result places the cursor on the exact line and column ripgrep
+reported, opens any fold over it, and centres it in the window.
+
+==============================================================================
+5. QUERY SYNTAX                                           *microscope-queries*
+
+FILES FIELD                                          *microscope-files-query*
+
+Fuzzy by default: `lumicini` matches `lua/microscope/init.lua`. The field
+switches to gitignore-style globs as soon as it contains one of `* ? [ {`, or
+starts with `!`:
+>
+    *.lua              every Lua file, at any depth
+    /*.lua             only Lua files at the top level
+    src/**/*.ts        TypeScript anywhere under src/
+    lua/               everything under lua/
+    *.{md,txt}         either extension
+    *.lua !tests/*     Lua files, excluding tests/
+<
+Space separates multiple globs. A path matches when it matches at least one
+non-negated glob and no negated one.
+
+GREP FIELD                                            *microscope-grep-query*
+
+A ripgrep regular expression with smart case: an all-lowercase pattern matches
+case-insensitively, and any capital letter makes it case-sensitive. A pattern
+that is not yet valid — `foo(` while you are still typing — shows "invalid
+search pattern" rather than an empty result list.
+
+Searches always cover Neovim's current working directory and honour
+`.gitignore` unless `<C-h>` is pressed.
+
+==============================================================================
+6. CONFIGURATION                                    *microscope-configuration*
+
+`setup()` accepts any subset of the following. Omitted keys keep their default.
+>lua
+    require("microscope").setup({
+        layout = {
+            width = 0.85,
+            height = 0.85,
+            preview_width = 0.55,
+            max_results_height = nil,
+        },
+        preview = {
+            enabled = true,
+            max_filesize = 1024 * 1024,
+            treesitter = false,
+        },
+        rg = {
+            hidden = false,
+            no_ignore = false,
+            extra_args = {},
+        },
+        debounce = { grep = 80, preview = 60, stream = 60 },
+        limits = {
+            max_results = 20000,
+            explicit_path_threshold = 2000,
+            argv_chunk_bytes = 100 * 1024,
+        },
+        default_binds = true,
+    })
+<
+`layout.width`, `layout.height` and `layout.preview_width` are fractions of the
+editor when 1 or less, and absolute cell counts otherwise. The preview is
+dropped automatically on a window narrower than 80 columns.
+
+`preview.treesitter` is off by default. With it off the preview sets 'syntax'
+rather than 'filetype', which avoids firing FileType autocommands into a
+throwaway buffer and is noticeably cheaper on large files.
+
+`limits.max_results` caps how many matches ripgrep output is read for. When it
+trips, the result counter shows a trailing `+`.
+
+`limits.explicit_path_threshold` decides how a grep is run. At or below it, the
+narrowed paths are passed to ripgrep directly: exact, and immune to
+`max_results`, but re-run whenever the file set changes. Above it, the whole
+directory is searched once and results are filtered in memory, so editing the
+files field costs nothing.
+
+==============================================================================
+7. COMMANDS                                             *microscope-commands*
+
+                                                                *:Microscope*
+:Microscope [{field}]   Open the picker. {field} is `files` (default) or
+                        `grep` and chooses which prompt line is focused.
+
+                                                         *:MicroscopeRefresh*
+:MicroscopeRefresh      Drop the cached file lists, so the next open re-walks
+                        the directory. Use it after creating files outside
+                        Neovim.
+
+==============================================================================
+8. LUA API                                                   *microscope-api*
+
+microscope.setup({opts})                                *microscope.setup()*
+    Merge {opts} over the defaults and install highlight groups.
+
+microscope.find_files({opts})                      *microscope.find_files()*
+    Open with the files field focused.
+
+microscope.live_grep({opts})                        *microscope.live_grep()*
+    Open with the grep field focused.
+
+microscope.open({opts})                                  *microscope.open()*
+    Open the picker. {opts} may contain:
+        cwd          directory to search (default: |getcwd()|)
+        focus        "files" or "grep"
+        files_query  initial text for the files field
+        grep_query   initial text for the grep field
+
+microscope.refresh({cwd})                             *microscope.refresh()*
+    Drop the cached file list for {cwd}, or for every directory if omitted.
+
+Example — grep the word under the cursor across the current file type: >lua
+    vim.keymap.set("n", "<leader>fw", function()
+        require("microscope").open({
+            files_query = "*." .. vim.fn.expand("%:e"),
+            grep_query = vim.fn.expand("<cword>"),
+            focus = "grep",
+        })
+    end)
+<
+==============================================================================
+9. HIGHLIGHTS                                         *microscope-highlights*
+
+All groups are defined with `default`, so your own definitions win.
+
+    MicroscopeNormal            window background      -> NormalFloat
+    MicroscopeBorder            window borders         -> FloatBorder
+    MicroscopeTitle             border titles          -> Title
+    MicroscopeMatch             matched characters     -> Special
+    MicroscopeSelection         the selected row       -> CursorLine
+    MicroscopeSelectionCaret    the caret beside it    -> Statement
+    MicroscopePromptLabel       inactive prompt label  -> Comment
+    MicroscopePromptLabelActive active prompt label    -> Statement
+    MicroscopeDir               directory part of path -> Comment
+    MicroscopeFile              file name part         -> Normal
+    MicroscopeLnum              line number in result  -> LineNr
+    MicroscopeEmpty             empty and error states -> Comment
+    MicroscopePreviewLine       matched preview line   -> Visual
+
+vim:tw=78:ts=8:noet:ft=help:norl:
