@@ -40,8 +40,24 @@ With [lazy.nvim](https://github.com/folke/lazy.nvim):
 
 ```lua
 {
-    "microscope.nvim",
-    dir = "~/Coding/microscope.nvim", -- or a git url
+    "davidlai3/microscope.nvim",
+    config = function()
+        require("microscope").setup({})
+    end,
+}
+```
+
+Don't lazy-load it on `cmd` or `keys` unless you also move the bindings out of
+`config`: `setup()` is what registers them, so deferring it leaves `<leader>ff`
+unbound until something else pulls the plugin in.
+
+To work on a local checkout instead, point lazy at the directory — the name still
+has to match so `require("microscope")` resolves:
+
+```lua
+{
+    "davidlai3/microscope.nvim",
+    dir = "~/Coding/microscope.nvim",
     config = function()
         require("microscope").setup({})
     end,
@@ -84,7 +100,8 @@ lua/               everything under lua/
 case-insensitively, any capital makes it case-sensitive.
 
 Searches always cover Neovim's current working directory and respect
-`.gitignore`.
+`.gitignore`. A line is listed once no matter how many times the pattern occurs
+on it, and the result jumps to the first match on that line.
 
 ## Configuration
 

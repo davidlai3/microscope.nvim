@@ -1,9 +1,14 @@
---- Streaming text search via `rg --vimgrep`.
+--- Streaming text search via `rg --column --line-number`.
 ---
---- `--max-columns` is not optional. Without it a single minified file turns a
---- common query into gigabytes of output, because `--vimgrep` repeats the whole
---- matched line once per match on it. Capping columns took one real query on a
---- 5,761-file tree from 2.5 GB to 7 MB.
+--- Deliberately *not* `--vimgrep`: that flag means "one output line per match",
+--- so `foo(foo, foo)` becomes three identical-looking rows differing only in a
+--- column the list never shows. These flags are what `--vimgrep` implies without
+--- that repetition, in the same `path:lnum:col:text` format, so a matching line
+--- appears exactly once and `col` points at its first match.
+---
+--- `--max-columns` is still not optional. Without it a single minified file
+--- turns a common query into gigabytes of output. Capping columns took one real
+--- query on a 5,761-file tree from 2.5 GB to 7 MB.
 ---
 --- The caller chooses between two modes:
 ---
@@ -20,7 +25,7 @@ local M = {}
 --- Lines longer than this are reported by ripgrep as omitted rather than sent.
 M.MAX_COLUMNS = 500
 
---- Parse one `--vimgrep` line: `path:lnum:col:text`.
+--- Parse one output line: `path:lnum:col:text`.
 ---
 --- The path is matched non-greedily so a filename containing a colon still
 --- parses, as long as it is not followed by `digits:digits:`.
@@ -44,7 +49,8 @@ end
 ---@return string[]
 function M.build_args(pattern, rg_opts)
     local args = {
-        "--vimgrep",
+        "--line-number",
+        "--column",
         "--no-heading",
         "--with-filename", -- rg omits it when given exactly one path
         "--color=never",

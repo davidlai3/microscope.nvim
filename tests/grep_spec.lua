@@ -7,7 +7,7 @@ local test, eq, ok = h.test, h.eq, h.ok
 
 -- parsing --------------------------------------------------------------------
 
-test("a vimgrep line parses into an entry", function()
+test("an output line parses into an entry", function()
     eq({
         path = "lua/microscope/init.lua",
         lnum = 12,
@@ -45,8 +45,17 @@ end)
 test("the column cap is always present", function()
     local args = grep.build_args("foo", { extra_args = {} })
     ok(vim.tbl_contains(args, "--max-columns=" .. grep.MAX_COLUMNS))
-    ok(vim.tbl_contains(args, "--vimgrep"))
     ok(vim.tbl_contains(args, "--smart-case"))
+end)
+
+test("the position flags are set without --vimgrep, so a line is reported once", function()
+    local args = grep.build_args("foo", { extra_args = {} })
+    ok(vim.tbl_contains(args, "--line-number"))
+    ok(vim.tbl_contains(args, "--column"))
+    h.falsy(
+        vim.tbl_contains(args, "--vimgrep"),
+        "--vimgrep repeats the line once per match on it, which is what we are avoiding"
+    )
 end)
 
 test("the filename is forced on, since one path would otherwise omit it", function()
@@ -68,6 +77,73 @@ end)
 
 test("extra_args are appended", function()
     ok(vim.tbl_contains(rg.common_args({ extra_args = { "--follow" } }), "--follow"))
+end)
+
+-- against real ripgrep --------------------------------------------------------
+
+--- Write `files` into a fresh directory and return its path.
+---@param files table<string, string>
+---@return string
+local function fixture(files)
+    local dir = vim.fn.tempname()
+    vim.fn.mkdir(dir, "p")
+    for name, contents in pairs(files) do
+        vim.fn.writefile(vim.split(contents, "\n"), dir .. "/" .. name)
+    end
+    return dir
+end
+
+--- Run a full search to completion and return everything it produced.
+---@return microscope.Entry[]
+local function search(dir, pattern)
+    local entries, done = {}, false
+    grep.search({
+        cwd = dir,
+        pattern = pattern,
+        rg_opts = { extra_args = {} },
+        max_results = 1000,
+        argv_chunk_bytes = 100 * 1024,
+        on_batch = function(batch)
+            vim.list_extend(entries, batch)
+        end,
+        on_done = function()
+            done = true
+        end,
+    })
+    vim.wait(5000, function()
+        return done
+    end, 10)
+    ok(done, "the search never finished")
+    return entries
+end
+
+test("a line matching several times is reported once", function()
+    local dir = fixture({
+        ["a.lua"] = "local x = foo(foo, foo)\nnothing here\nfoo again\n",
+    })
+    local entries = search(dir, "foo")
+
+    eq(2, #entries, "three matches on line 1 and one on line 3 should give two entries")
+    eq({ 1, 3 }, { entries[1].lnum, entries[2].lnum })
+    -- The surviving entry points at the first match on its line.
+    eq(11, entries[1].col)
+    eq("local x = foo(foo, foo)", entries[1].text)
+end)
+
+test("distinct lines and files are all kept", function()
+    local dir = fixture({
+        ["a.lua"] = "foo foo\nfoo\n",
+        ["b.lua"] = "foo foo foo\n",
+    })
+    local entries = search(dir, "foo")
+
+    local seen = {}
+    for _, entry in ipairs(entries) do
+        local key = entry.path .. ":" .. entry.lnum
+        h.falsy(seen[key], "duplicate entry for " .. key)
+        seen[key] = true
+    end
+    eq(3, #entries)
 end)
 
 -- argv chunking --------------------------------------------------------------

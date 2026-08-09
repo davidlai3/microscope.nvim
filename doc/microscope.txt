@@ -144,8 +144,11 @@ dropped automatically on a window narrower than 80 columns.
 rather than 'filetype', which avoids firing FileType autocommands into a
 throwaway buffer and is noticeably cheaper on large files.
 
-`limits.max_results` caps how many matches ripgrep output is read for. When it
-trips, the result counter shows a trailing `+`.
+`limits.max_results` caps how many matching lines ripgrep output is read for.
+When it trips, the result counter shows a trailing `+`.
+
+A line that matches the pattern several times produces one result, not one per
+occurrence, and that result points at the first match on the line.
 
 `limits.explicit_path_threshold` decides how a grep is run. At or below it, the
 narrowed paths are passed to ripgrep directly: exact, and immune to

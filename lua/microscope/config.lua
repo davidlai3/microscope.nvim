@@ -39,7 +39,8 @@ M.defaults = {
     },
 
     limits = {
-        -- Stop consuming ripgrep output past this many raw matches.
+        -- Stop consuming ripgrep output past this many matching lines. A line is
+        -- counted once however many times the pattern occurs on it.
         max_results = 20000,
         -- When the file filter narrows to at most this many paths, hand them to
         -- ripgrep as explicit arguments instead of searching all of cwd. That is
