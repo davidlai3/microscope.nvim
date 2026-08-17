@@ -35,6 +35,7 @@ M.PROMPT_OUTER_HEIGHT = M.PROMPT_ROWS + 2
 ---@field preview microscope.Rect|nil
 ---@field prompt microscope.Rect
 ---@field results_height integer usable text rows in the results window
+---@field results_width integer usable text columns in the results window
 
 ---@param value number a fraction of `total`, or an absolute cell count if >= 1
 ---@param total integer
@@ -92,6 +93,7 @@ function M.compute(opts)
             height = M.PROMPT_OUTER_HEIGHT,
         },
         results_height = results_height,
+        results_width = math.max(1, results_width - 2),
     }
 end
 

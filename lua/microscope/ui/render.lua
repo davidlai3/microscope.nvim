@@ -16,6 +16,16 @@ M.LABELS = { grep = " grep  ❯ ", files = " files ❯ " }
 M.CARET = " ❯ "
 M.NO_CARET = "   "
 
+--- Stands in for the middle of a path too long for its row. One display cell,
+--- three bytes - both matter, since spans are measured in bytes and budgets in
+--- cells.
+M.ELLIPSIS = "…"
+M.ELLIPSIS_WIDTH = 1
+
+--- The caret is inline virtual text, so it occupies real columns on every
+--- populated row and has to come out of the width available to the text.
+M.CARET_WIDTH = vim.fn.strdisplaywidth(M.CARET)
+
 local ns = window.ns
 
 --- Buffer row (0-based) that a given entry index is drawn on.
@@ -63,13 +73,124 @@ local function match_length(text, col, query)
     return nil
 end
 
+--- One UTF-8 character: a lead byte followed by its continuation bytes.
+local UTF8_CHAR = "[%z\1-\127\194-\244][\128-\191]*"
+
+---@param str string
+---@return string[]
+local function characters(str)
+    local chars = {}
+    for char in str:gmatch(UTF8_CHAR) do
+        chars[#chars + 1] = char
+    end
+    return chars
+end
+
+--- Bytes of the longest prefix of `chars` fitting in `budget` display cells.
+---@param chars string[]
+---@param budget integer
+---@return integer
+local function head_bytes(chars, budget)
+    local width, bytes = 0, 0
+    for i = 1, #chars do
+        local cells = vim.fn.strdisplaywidth(chars[i])
+        if width + cells > budget then
+            break
+        end
+        width, bytes = width + cells, bytes + #chars[i]
+    end
+    return bytes, width
+end
+
+--- The same for the longest suffix.
+---@param chars string[]
+---@param budget integer
+---@return integer
+local function tail_bytes(chars, budget)
+    local width, bytes = 0, 0
+    for i = #chars, 1, -1 do
+        local cells = vim.fn.strdisplaywidth(chars[i])
+        if width + cells > budget then
+            break
+        end
+        width, bytes = width + cells, bytes + #chars[i]
+    end
+    return bytes, width
+end
+
+--- Shorten `path` to `budget` display cells by replacing its middle with `…`.
+---
+--- The tail gets the larger half of what is left over: the basename is what the
+--- reader is looking for, and the leading directories are the redundant part.
+--- Both ends are grown a character at a time and measured in cells, so a path
+--- with double-width characters is budgeted correctly and never cut in half.
+---@param path string
+---@param budget integer display cells
+---@return string elided, { head: integer, tail_start: integer }|nil cut
+---        `cut` holds the 0-based byte offsets bounding the removed region, and
+---        is nil when the path fitted and nothing was removed.
+function M.elide(path, budget)
+    if vim.fn.strdisplaywidth(path) <= budget then
+        return path, nil
+    end
+
+    local chars = characters(path)
+    local spare = math.max(0, budget - M.ELLIPSIS_WIDTH)
+    local tail, tail_width = tail_bytes(chars, math.ceil(spare / 2))
+    -- Cells the tail could not use - a double-width character straddling its
+    -- limit - are handed back to the head rather than wasted.
+    local head = head_bytes(chars, spare - tail_width)
+
+    return path:sub(1, head) .. M.ELLIPSIS .. path:sub(#path - tail + 1),
+        { head = head, tail_start = #path - tail }
+end
+
+--- Where a byte offset into the original path lands after `cut` was applied.
+---@param position integer 0-based
+---@param cut { head: integer, tail_start: integer }|nil
+---@return integer|nil nil when the offset was inside the elided region
+local function reposition(position, cut)
+    if not cut or position < cut.head then
+        return position
+    end
+    if position < cut.tail_start then
+        return nil
+    end
+    return position - cut.tail_start + cut.head + #M.ELLIPSIS
+end
+
 --- The text drawn for one entry, plus the highlight spans over it.
 ---@param entry microscope.Entry
 ---@param query string|nil the grep query, used to size the match highlight
+---@param width integer|nil display cells available for the row; nil or 0 for
+---       unlimited, which is what the unit tests and any non-window caller want
 ---@return string text, table[] spans each { from, to, group } with 0-based byte cols
-function M.format(entry, query)
+function M.format(entry, query, width)
     local spans = {}
     local path = entry.path
+    local budget = (width and width > 0) and width or nil
+
+    if budget and entry.lnum then
+        -- A grep row is split down the middle: the path keeps half the width
+        -- and the matched line keeps the other half. Neither side wastes what
+        -- it does not need - a short line leaves the path spelled out in full,
+        -- and a short path leaves the line the rest of the row. Below half the
+        -- path still never shrinks past its own basename, which on a narrow
+        -- window can be the wider claim.
+        local rest = (":%d %s"):format(entry.lnum, entry.text or "")
+        local half = math.floor(width / 2)
+        local floor = vim.fn.strdisplaywidth(path:match("[^/]*$")) + M.ELLIPSIS_WIDTH
+        budget = math.min(width, math.max(width - vim.fn.strdisplaywidth(rest), half, floor))
+    end
+
+    local cut
+    if budget then
+        path, cut = M.elide(path, budget)
+    end
+
+    -- Recomputed on the elided path rather than remapped: whichever slash
+    -- survives is the one the reader sees. If none did, the row simply has no
+    -- directory span, exactly as a bare filename already does.
     local slash = path:find("/[^/]*$")
 
     if slash then
@@ -94,8 +215,12 @@ function M.format(entry, query)
     end
 
     -- Fuzzy positions index into the path, which always starts at column 0.
+    -- Elision moves the ones behind it and swallows the ones inside it.
     for _, position in ipairs(entry.positions or {}) do
-        table.insert(spans, { from = position, to = position + 1, group = "MicroscopeMatch" })
+        local at = reposition(position, cut)
+        if at then
+            table.insert(spans, { from = at, to = at + 1, group = "MicroscopeMatch" })
+        end
     end
 
     return text, spans
@@ -112,12 +237,13 @@ function M.results(windows, state)
 
     local visible = state_mod.visible(state)
     local lines, all_spans = {}, {}
+    local width = state.width > 0 and state.width - M.CARET_WIDTH or 0
 
     for _ = 1, state.height - #visible do
         table.insert(lines, "")
     end
     for i = #visible, 1, -1 do
-        local text, spans = M.format(visible[i], state.queries.grep)
+        local text, spans = M.format(visible[i], state.queries.grep, width)
         table.insert(lines, text)
         all_spans[#lines] = spans
     end

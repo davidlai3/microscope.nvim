@@ -62,6 +62,7 @@ function M.open(opts)
 
     picker.windows = window.open(picker.config)
     picker.state.height = picker.windows.layout.results_height
+    picker.state.width = picker.windows.layout.results_width
 
     picker.grep_debounced = util.debounce(picker.config.debounce.grep, function()
         picker:run_grep()
@@ -512,6 +513,7 @@ function Picker:setup_autocmds()
             end
             local computed = window.relayout(self.windows, self.config)
             self.state.height = computed.results_height
+            self.state.width = computed.results_width
             state_mod.clamp_scroll(self.state)
             self:redraw()
         end,

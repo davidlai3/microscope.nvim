@@ -40,6 +40,7 @@ M.PROMPT_STOPS = 2
 ---@field selection integer 1-based index into `entries`
 ---@field scroll integer 1-based index of the lowest visible entry
 ---@field height integer rows available in the results window
+---@field width integer columns available in the results window, 0 for unlimited
 ---@field truncated boolean ripgrep output hit the result cap
 ---@field loading boolean a source is still producing results
 ---@field error string|nil shown in place of "no matches", e.g. a bad regex
@@ -59,6 +60,7 @@ function M.new(cwd)
         selection = 1,
         scroll = 1,
         height = 1,
+        width = 0,
         truncated = false,
         loading = true,
         error = nil,

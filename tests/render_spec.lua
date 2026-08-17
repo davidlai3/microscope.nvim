@@ -145,3 +145,125 @@ end)
 test("an entry with no text does not error", function()
     eq("a.lua:3 ", render.format({ path = "a.lua", lnum = 3, col = 1 }, "q"))
 end)
+
+-- eliding long paths -----------------------------------------------------------
+
+--- 28 bytes, 28 cells. At a budget of 20 it splits 9 / 10 around the ellipsis.
+local LONG = "lua/microscope/ui/render.lua"
+
+--- The path portion of a rendered grep row.
+local function path_of(text)
+    return text:match("^(.-):%d+ ")
+end
+
+local function match_span(spans)
+    for _, span in ipairs(spans) do
+        if span.group == "MicroscopeMatch" then
+            return span
+        end
+    end
+end
+
+test("a path within its budget is left alone", function()
+    eq("lua/init.lua", render.elide("lua/init.lua", 20))
+end)
+
+test("a long path is elided to exactly its budget", function()
+    local elided = render.elide(LONG, 20)
+    eq("lua/micro…render.lua", elided)
+    eq(20, vim.fn.strdisplaywidth(elided))
+end)
+
+test("elision favours the tail, so the basename survives", function()
+    eq("lua/mic…der.lua", render.elide(LONG, 15))
+    eq("lua/m…r.lua", render.elide(LONG, 11))
+end)
+
+test("a budget with no room to spare is just the ellipsis", function()
+    eq("…", render.elide(LONG, 1))
+    eq("…", render.elide(LONG, 0))
+end)
+
+test("elision measures display cells and never cuts a character in half", function()
+    -- The double-width chars mean 12 cells cannot all be used; the point is
+    -- that the result stays within budget and stays valid UTF-8.
+    eq("aaa/…bb.lua", render.elide("aaa/日本語/bb.lua", 12))
+end)
+
+test("format without a width elides nothing", function()
+    eq(LONG, (render.format({ path = LONG }, "")))
+    eq(LONG, (render.format({ path = LONG }, "", 0)))
+end)
+
+test("a file row is elided to the full width", function()
+    eq("lua/micro…render.lua", (render.format({ path = LONG }, "", 20)))
+end)
+
+test("the dir and file spans tile the elided path", function()
+    local text, spans = render.format({ path = LONG }, "", 20)
+    eq({ from = 0, to = 4, group = "MicroscopeDir" }, spans[1])
+    eq({ from = 4, to = #text, group = "MicroscopeFile" }, spans[2])
+end)
+
+test("fuzzy positions after the cut shift, and ones inside it are dropped", function()
+    local _, spans = render.format({ path = LONG, positions = { 0, 12, 20 } }, "", 20)
+    local matches = {}
+    for _, span in ipairs(spans) do
+        if span.group == "MicroscopeMatch" then
+            table.insert(matches, { span.from, span.to })
+        end
+    end
+    -- 0 is in the head and unmoved, 12 falls inside the ellipsis, 20 is the "n"
+    -- of "render" and follows the tail to its new offset.
+    eq({ { 0, 1 }, { 14, 15 } }, matches)
+end)
+
+test("a grep row shrinks the path to make room for the source text", function()
+    local text = render.format({
+        path = LONG,
+        lnum = 120,
+        col = 1,
+        text = "local text, spans = M.format(...)",
+    }, "", 46)
+    eq("lua/microsc…/render.lua:120 local text, spans = M.format(...)", text)
+end)
+
+test("a grep row keeps half the width for the path", function()
+    local text = render.format({
+        path = LONG,
+        lnum = 120,
+        col = 1,
+        text = ("x"):rep(200),
+    }, "", 46)
+    eq("lua/microsc…/render.lua", path_of(text))
+    eq(23, vim.fn.strdisplaywidth(path_of(text)), "half of 46")
+end)
+
+test("a grep row gives the path more than half when the line is short", function()
+    local text = render.format({ path = LONG, lnum = 1, col = 1, text = "x" }, "", 46)
+    eq(LONG, path_of(text), "the whole path fits in what the line leaves over")
+end)
+
+test("a grep row never shrinks the path below its basename", function()
+    local text = render.format({
+        path = LONG,
+        lnum = 120,
+        col = 1,
+        text = ("x"):rep(200),
+    }, "", 20)
+    eq("lua/m…r.lua", path_of(text), "the floor is the basename plus an ellipsis")
+end)
+
+test("the lnum and match spans follow the shortened path", function()
+    local text, spans = render.format({
+        path = LONG,
+        lnum = 12,
+        col = 7,
+        text = "local x = 1",
+    }, "x", 30)
+
+    eq("lua/mic…der.lua", path_of(text))
+    eq({ from = 17, to = 20, group = "MicroscopeLnum" }, spans[3])
+    local match = match_span(spans)
+    eq("x", text:sub(match.from + 1, match.to))
+end)

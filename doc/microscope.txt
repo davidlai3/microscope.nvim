@@ -30,6 +30,13 @@ A blank field means "no restriction", so one picker covers three jobs:
 The prompt is anchored at the bottom of the window and the results list grows
 upward from it, so the best match is always on the row nearest the cursor.
 
+A path too wide for the results window has its middle replaced by a `…`, so
+both the leading directory and the filename stay readable. A grep result splits
+the row down the middle: the path keeps half the width and the matched line
+keeps the other half. Neither side wastes what it does not need, so a short
+line leaves the path spelled out in full. The path never shrinks past its own
+filename.
+
 ==============================================================================
 2. REQUIREMENTS                                     *microscope-requirements*
 
